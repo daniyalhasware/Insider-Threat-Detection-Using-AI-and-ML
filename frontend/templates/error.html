@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Error</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+</head>
+<body>
+    <div class="dashboard-container">
+        <h1 class="dashboard-title">Error</h1>
+        <div class="error-message">
+            <p>{{ error_message }}</p>
+            <p>User ID: {{ user_id }}</p>
+            <a href="{{ url_for('dashboard') }}">Return to Dashboard</a>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live User Monitoring Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <audio id="anomaly-sound" preload="auto">
+        <source src="{{ url_for('static', filename='sounds/anomaly.mp3') }}" type="audio/mpeg">
+    </audio>
+    <audio id="usb-sound" preload="auto">
+        <source src="{{ url_for('static', filename='sounds/usb_alert.mp3') }}" type="audio/mpeg">
+    </audio>
+    <style>
+        /* Styles for the risk score */
+        .risk-score {
+            font-size: 1.5em;
+            font-weight: bold;
+            margin-top: 10px;
+            padding: 2px 8px;
+            border-radius: 5px;
+            color: white;
+            transition: background-color 0.5s;
+        }
+        .risk-score.low { background-color: #28a745; } /* Green */
+        .risk-score.medium { background-color: #ffc107; color: #000; } /* Yellow */
+        .risk-score.high { background-color: #dc3545; } /* Red */
+        .clear-score-btn {
+            background-color: #17a2b8; /* Info Blue */
+            color: white;
+            padding: 5px 8px;
+            font-size: 12px;
+            margin-left: 10px;
+            border: none;
+            cursor: pointer;
+        }
+        .anomaly-log {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            padding: 10px;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+        .anomaly-log.high {
+            border-left: 4px solid #dc3545;
+            background-color: #f8d7da;
+        }
+        .anomaly-log.medium {
+            border-left: 4px solid #ffc107;
+            background-color: #fff3cd;
+        }
+        .anomaly-log.low {
+            border-left: 4px solid #28a745;
+            background-color: #d4edda;
+        }
+        .log-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+        .log-type {
+            font-weight: bold;
+            color: #495057;
+        }
+        .log-time {
+            font-size: 12px;
+            color: #6c757d;
+        }
+        .log-severity {
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: bold;
+        }
+        .log-severity.high {
+            background-color: #dc3545;
+            color: white;
+        }
+        .log-severity.medium {
+            background-color: #ffc107;
+            color: #000;
+        }
+        .log-severity.low {
+            background-color: #28a745;
+            color: white;
+        }
+        .log-content {
+            color: #495057;
+        }
+        .no-alerts {
+            text-align: center;
+            color: #6c757d;
+            font-style: italic;
+            padding: 20px;
+        }
+        .logs-scroll-container {
+            max-height: 300px;
+            overflow-y: auto;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            background-color: #f8f9fa;
+            padding: 10px;
+        }
+        .logs-scroll-container::-webkit-scrollbar {
+            width: 8px;
+        }
+        .logs-scroll-container::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 4px;
+        }
+        .logs-scroll-container::-webkit-scrollbar-thumb {
+            background: #888;
+            border-radius: 4px;
+        }
+        .logs-scroll-container::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="dashboard-container" data-online-users='{{ online_user_ids | tojson | safe }}' data-risk-scores='{{ risk_scores | safe }}' data-anomaly-logs='{{ anomaly_logs | safe }}'>
+        <h1 class="dashboard-title">Insider Threat Detection</h1>
+
+        <div class="top-section">
+            <div class="usb-alerts-section">
+                <h2>USB Alerts History</h2>
+                <button onclick="clearUsbAlerts()" class="clear-btn">Clear USB History</button>
+                <div class="logs-scroll-container">
+                    <div id="usb-alerts-container"></div>
+                </div>
+            </div>
+
+            <div class="network-section">
+                <h2>Overall Network Usage</h2>
+                <button onclick="clearNetworkGraph()" class="clear-btn">Clear Network Graph</button>
+                <div id="overall-network-graph-container">
+                    <canvas id="overall-network-graph" width="800" height="200"></canvas>
+                </div>
+            </div>
+
+            <div class="alerts-section">
+                <h2>Anomaly Alerts (Last 24 Hours)</h2>
+                <div class="logs-scroll-container">
+                    <div id="anomaly-logs-container"></div>
+                </div>
+            </div>
+        </div>
+
+
+        <div class="bottom-section">
+            <h2>User Monitoring</h2>
+            <div class="user-grid" id="user-grid">
+                {% for user in users %}
+                    <div class="user-tile {% if user[0] in online_user_ids %}user-tile-online{% endif %}" id="user-{{ user[0] }}">
+                        <div>{{ user[1] }}<br>({{ user[2] }})</div>
+                        <div class="risk-score low" id="risk-{{ user[0] }}">
+                            Score: 0
+                            <button class="clear-score-btn" onclick="clearRiskScore('{{ user[0] }}')">Clear</button>
+                        </div>
+                        <div class="user-actions">
+                            {% if user[4] == 0 %}
+                                <button class="accept-btn" onclick="acceptUser('{{ user[0] }}')">Accept</button>
+                                <button class="reject-btn" onclick="rejectUser('{{ user[0] }}')">Reject</button>
+                            {% else %}
+                                <span>Accepted</span>
+                            {% endif %}
+                            <button onclick="viewUserLogs('{{ user[0] }}')">View Logs</button>
+                        </div>
+                    </div>
+                {% endfor %}
+            </div>
+
+            <div class="status-bar">
+                <span>Total users: <span id="total-count">{{ users|length }}</span></span>
+                <span>Online: <span id="online-count">0</span></span>
+                <span>Offline: <span id="offline-count">0</span></span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        const container = document.querySelector('.dashboard-container');
+        const onlineUsers = new Set(JSON.parse(container.dataset.onlineUsers || '[]'));
+        const riskScores = JSON.parse(container.dataset.riskScores || '{}');
+        const anomalyLogs = JSON.parse(container.dataset.anomalyLogs || '[]');
+
+        function displayAnomalyLogs(logs) {
+            const container = document.getElementById('anomaly-logs-container');
+            if (!logs || logs.length === 0) {
+                container.innerHTML = '<div class="no-alerts">No anomalies detected in the last 24 hours</div>';
+                return;
+            }
+
+            container.innerHTML = '';
+            logs.forEach(log => {
+                const logDiv = document.createElement('div');
+                logDiv.className = `anomaly-log ${log.severity}`;
+                logDiv.innerHTML = `
+                    <div class="log-header">
+                        <span class="log-type">${log.type.toUpperCase()}</span>
+                        <span class="log-time">${new Date(log.timestamp).toLocaleString()}</span>
+                        <span class="log-severity ${log.severity}">${log.severity.toUpperCase()}</span>
+                    </div>
+                    <div class="log-content">
+                        <strong>User:</strong> ${log.username} (${log.user_id})<br>
+                        <strong>Details:</strong> ${log.details}
+                    </div>
+                `;
+                container.appendChild(logDiv);
+            });
+        }
+        
+        // Function to fetch and refresh anomaly logs
+        function fetchAnomalyLogs() {
+            fetch('/get_anomaly_logs?hours=24')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.anomalies) {
+                        displayAnomalyLogs(data.anomalies);
+                    }
+                })
+                .catch(err => {
+                    console.error('Error fetching anomaly logs:', err);
+                });
+        }
+
+        function updateRiskScore(userId, score) {
+            const riskElement = document.getElementById(`risk-${userId}`);
+            if (riskElement) {
+                const clearButton = `<button class="clear-score-btn" onclick="clearRiskScore('${userId}')">Clear</button>`;
+                riskElement.innerHTML = `Score: ${score} ${clearButton}`;
+                riskElement.className = 'risk-score';
+                if (score < 20) riskElement.classList.add('low');
+                else if (score < 50) riskElement.classList.add('medium');
+                else riskElement.classList.add('high');
+            }
+        }
+
+        function clearRiskScore(userId) {
+            if (confirm(`Are you sure you want to clear the risk score for this user?`)) {
+                fetch(`/clear_risk_score/${userId}`, { method: 'POST' })
+                .then(response => { if (!response.ok) alert('Failed to clear risk score.'); });
+            }
+        }
+
+        function updateUserCounts() {
+            const totalUsers = document.querySelectorAll('.user-tile').length;
+            document.getElementById('total-count').textContent = totalUsers;
+            document.getElementById('online-count').textContent = onlineUsers.size;
+            document.getElementById('offline-count').textContent = totalUsers - onlineUsers.size;
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            updateUserCounts();
+            for (const [userId, score] of Object.entries(riskScores)) {
+                updateRiskScore(userId, score);
+            }
+            // Initial display of anomaly logs
+            displayAnomalyLogs(anomalyLogs);
+            
+            // Auto-refresh anomaly logs every 5 seconds
+            setInterval(fetchAnomalyLogs, 5000);
+        });
+
+        socket.on('update_risk_score', (data) => updateRiskScore(data.user_id, data.score));
+
+        socket.on('new_user', (data) => {
+            const userGrid = document.getElementById('user-grid');
+            const userTile = document.createElement('div');
+            userTile.className = 'user-tile';
+            userTile.id = `user-${data.user_id}`;
+            userTile.innerHTML = `
+                <div>${data.username}<br>(${data.pc_name})</div>
+                <div class="risk-score low" id="risk-${data.user_id}">
+                    Score: 0
+                    <button class="clear-score-btn" onclick="clearRiskScore('${data.user_id}')">Clear</button>
+                </div>
+                <div class="user-actions">
+                    <button class="accept-btn" onclick="acceptUser('${data.user_id}')">Accept</button>
+                    <button class="reject-btn" onclick="rejectUser('${data.user_id}')">Reject</button>
+                    <button onclick="viewUserLogs('${data.user_id}')">View Logs</button>
+                </div>`;
+            userGrid.appendChild(userTile);
+            updateUserCounts();
+        });
+
+        socket.on('user_accepted', (data) => {
+            const userTile = document.getElementById(`user-${data.user_id}`);
+            if (userTile) userTile.querySelector('.user-actions').innerHTML = `<span>Accepted</span><button onclick="viewUserLogs('${data.user_id}')">View Logs</button>`;
+        });
+
+        socket.on('user_removed', (data) => {
+            const userTile = document.getElementById(`user-${data.user_id}`);
+            if (userTile) userTile.remove();
+            onlineUsers.delete(data.user_id);
+            updateUserCounts();
+        });
+
+        socket.on('user_online', (data) => {
+            onlineUsers.add(data.user_id);
+            const userTile = document.getElementById(`user-${data.user_id}`);
+            if (userTile) userTile.classList.add('user-tile-online');
+            updateUserCounts();
+        });
+
+        socket.on('user_offline', (data) => {
+            onlineUsers.delete(data.user_id);
+            const userTile = document.getElementById(`user-${data.user_id}`);
+            if (userTile) userTile.classList.remove('user-tile-online');
+            updateUserCounts();
+        });
+        
+        function createAnomalyAlert(data, type) {
+            console.log('Anomaly alert received:', data, type);
+            
+            // Play sound first
+            playAnomalySound();
+            
+            // Refresh anomaly logs to show the new anomaly immediately
+            fetchAnomalyLogs();
+            
+            // Highlight the user tile
+            const userTile = document.getElementById(`user-${data.user_id}`);
+            if (userTile) {
+                userTile.classList.add('anomaly-detected');
+                setTimeout(() => userTile.classList.remove('anomaly-detected'), 10000);
+            }
+        }
+
+        socket.on('logon_anomaly_alert', (data) => createAnomalyAlert(data, 'logon'));
+        socket.on('file_anomaly_alert', (data) => createAnomalyAlert(data, 'file'));
+        socket.on('device_anomaly_alert', (data) => createAnomalyAlert(data, 'device'));
+        socket.on('http_anomaly_alert', (data) => createAnomalyAlert(data, 'http'));
+
+        function clearUsbAlerts() {
+            fetch('/clear_usb_alerts', { method: 'POST' })
+            .then(response => {
+                if (response.ok) {
+                    document.getElementById('usb-alerts-container').innerHTML = '';
+                    alert("USB alerts history cleared");
+                }
+            });
+        }
+
+        // --- FIX: This block now correctly adds the visual alert to the UI ---
+        socket.on('usb_alert', (data) => {
+            playUsbSound();
+            const usbAlertsContainer = document.getElementById('usb-alerts-container');
+            const usbAlertDiv = document.createElement('div');
+            usbAlertDiv.className = 'usb-alert';
+            usbAlertDiv.textContent = data.message;
+            usbAlertsContainer.appendChild(usbAlertDiv);
+        });
+
+        function acceptUser(userId) {
+            fetch(`/accept_user/${userId}`, { method: 'POST' }).then(r => r.ok && console.log('User accepted'));
+        }
+
+        function rejectUser(userId) {
+            const adminPassword = prompt("Enter admin password to reject/remove user:");
+            if (adminPassword) {
+                fetch(`/remove_user/${userId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ admin_password: adminPassword })
+                }).then(r => r.ok && console.log('User rejected'));
+            }
+        }
+
+        function viewUserLogs(userId) {
+            window.location.href = `/user_logs/${userId}`;
+        }
+        
+        const overallNetworkCtx = document.getElementById('overall-network-graph').getContext('2d');
+        const storedGraphData = JSON.parse(localStorage.getItem('overallNetworkGraphData')) || { labels: [], datasets: [{ data: [] }, { data: [] }] };
+
+        const overallNetworkGraph = new Chart(overallNetworkCtx, {
+            type: 'line',
+            data: {
+                labels: storedGraphData.labels,
+                datasets: [{
+                    label: 'Incoming Traffic (Bytes)',
+                    data: storedGraphData.datasets[0].data,
+                    borderColor: 'blue',
+                    fill: false
+                },
+                {
+                    label: 'Outgoing Traffic (Bytes)',
+                    data: storedGraphData.datasets[1].data,
+                    borderColor: 'red',
+                    fill: false
+                }]
+            },
+            options: { scales: { x: { type: 'linear', position: 'bottom'}, y: { beginAtZero: true } } }
+        });
+
+        function fetchOverallNetworkUsage() {
+            fetch('/overall_network_usage').then(response => response.json()).then(data => {
+                const timeNow = Date.now();
+                overallNetworkGraph.data.labels.push(timeNow);
+                overallNetworkGraph.data.datasets[0].data.push(data.bytes_recv);
+                overallNetworkGraph.data.datasets[1].data.push(data.bytes_sent);
+                if (overallNetworkGraph.data.labels.length > 60) {
+                    overallNetworkGraph.data.labels.shift();
+                    overallNetworkGraph.data.datasets.forEach(dataset => dataset.data.shift());
+                }
+                overallNetworkGraph.update();
+                localStorage.setItem('overallNetworkGraphData', JSON.stringify(overallNetworkGraph.data));
+            });
+        }
+
+        function clearNetworkGraph() {
+            overallNetworkGraph.data.labels = [];
+            overallNetworkGraph.data.datasets.forEach(dataset => dataset.data = []);
+            overallNetworkGraph.update();
+            localStorage.removeItem('overallNetworkGraphData');
+        }
+
+        window.addEventListener('load', function() {
+            fetch('/get_usb_alerts').then(response => response.json()).then(data => {
+                const container = document.getElementById('usb-alerts-container');
+                data.alerts.forEach(alert => {
+                    const div = document.createElement('div');
+                    div.className = 'usb-alert';
+                    div.textContent = alert;
+                    container.appendChild(div);
+                });
+            });
+            fetchOverallNetworkUsage();
+            setInterval(fetchOverallNetworkUsage, 5000);
+        });
+
+        const anomalySound = document.getElementById('anomaly-sound');
+        const usbSound = document.getElementById('usb-sound');
+        
+        // Preload and enable audio on user interaction (required by browsers)
+        let audioEnabled = false;
+        document.addEventListener('click', function enableAudio() {
+            if (!audioEnabled) {
+                if (anomalySound) {
+                    anomalySound.load();
+                }
+                if (usbSound) {
+                    usbSound.load();
+                }
+                audioEnabled = true;
+                document.removeEventListener('click', enableAudio);
+            }
+        }, { once: true });
+
+        function playAnomalySound() {
+            if (anomalySound && audioEnabled) {
+                try {
+                    anomalySound.currentTime = 0;
+                    const playPromise = anomalySound.play();
+                    if (playPromise !== undefined) {
+                        playPromise.catch(e => {
+                            console.warn("Could not play anomaly sound:", e);
+                            // Try to enable audio again
+                            audioEnabled = false;
+                        });
+                    }
+                } catch (e) {
+                    console.warn("Error playing anomaly sound:", e);
+                }
+            } else if (!audioEnabled) {
+                console.log("Audio not enabled yet - user interaction required");
+            }
+        }
+
+        function playUsbSound() {
+            if (usbSound && audioEnabled) {
+                try {
+                    usbSound.currentTime = 0;
+                    const playPromise = usbSound.play();
+                    if (playPromise !== undefined) {
+                        playPromise.catch(e => {
+                            console.warn("Could not play USB sound:", e);
+                            // Try to enable audio again
+                            audioEnabled = false;
+                        });
+                    }
+                } catch (e) {
+                    console.warn("Error playing USB sound:", e);
+                }
+            } else if (!audioEnabled) {
+                console.log("Audio not enabled yet - user interaction required");
+            }
+        }
+     
+    </script>
+    <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+</body>
+</html>

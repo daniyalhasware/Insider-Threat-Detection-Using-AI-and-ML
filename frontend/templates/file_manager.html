@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>File Manager - {{ pc_name }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f8f9fa;
+            padding: 20px;
+        }
+        .file-manager-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            padding: 20px;
+        }
+        .file-table {
+            width: 100%;
+        }
+        .file-actions {
+            display: flex;
+            gap: 10px;
+        }
+        .upload-section {
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #e9ecef;
+            border-radius: 5px;
+        }
+        .breadcrumb {
+            background-color: #e9ecef;
+            padding: 8px 15px;
+            border-radius: 5px;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .status-active {
+            background-color: #28a745;
+            color: white;
+        }
+        .status-inactive {
+            background-color: #dc3545;
+            color: white;
+        }
+        .btn-sm {
+            padding: 0.25rem 0.5rem;
+            font-size: 0.875rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="file-manager-container">
+        <h2 class="mb-4">Shared Files - {{ pc_name }}</h2>
+        
+        <div class="d-flex justify-content-between mb-3">
+            <div class="breadcrumb">
+                <span id="current-folder">/shared</span>
+            </div>
+            <div>
+                <span class="status-badge" id="access-status">Loading permissions...</span>
+            </div>
+        </div>
+        
+        <div class="upload-section" id="upload-section">
+            <h5>Upload Files</h5>
+            <form id="upload-form" enctype="multipart/form-data">
+                <div class="mb-3">
+                    <input class="form-control" type="file" id="file-input" multiple>
+                </div>
+                <button type="button" class="btn btn-primary" onclick="uploadFiles()">Upload</button>
+            </form>
+        </div>
+        
+        <div class="table-responsive">
+            <table class="table table-striped file-table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Size</th>
+                        <th>Modified</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="file-list">
+                    <tr>
+                        <td colspan="4" class="text-center">Loading files...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        const userId = new URLSearchParams(window.location.search).get('user_id') || "{{ user_id }}";
+        let currentAccess = { read: false, write: false };
+
+        console.log("File Manager initialized for user:", userId);
+
+        // Check file access permissions
+        function checkPermissions() {
+            console.log("Checking permissions for user:", userId);
+            fetch(`/get_file_access/${userId}`)
+                .then(response => {
+                    console.log("Permission response status:", response.status);
+                    return response.json();
+                })
+                .then(data => {
+                    console.log("Permission data:", data);
+                    if (data.error) {
+                        throw new Error(data.error);
+                    }
+                    currentAccess = data;
+                    updateAccessStatus();
+                    
+                    // Hide upload section if no write access
+                    if (!data.write) {
+                        document.getElementById('upload-section').style.display = 'none';
+                    } else {
+                        document.getElementById('upload-section').style.display = 'block';
+                    }
+                    
+                    // Load files if read access
+                    if (data.read) {
+                        loadFiles();
+                    } else {
+                        document.getElementById('file-list').innerHTML = `
+                            <tr>
+                                <td colspan="4" class="text-center text-muted">
+                                    No read access to files
+                                </td>
+                            </tr>
+                        `;
+                    }
+                })
+                .catch(error => {
+                    console.error("Error checking permissions:", error);
+                    document.getElementById('file-list').innerHTML = `
+                        <tr>
+                            <td colspan="4" class="text-center text-danger">
+                                Error loading file access permissions: ${error.message}
+                            </td>
+                        </tr>
+                    `;
+                });
+        }
+
+        function updateAccessStatus() {
+            const statusElement = document.getElementById('access-status');
+            if (currentAccess.read && currentAccess.write) {
+                statusElement.textContent = "Read/Write Access";
+                statusElement.className = "status-badge status-active";
+            } else if (currentAccess.read) {
+                statusElement.textContent = "Read Only Access";
+                statusElement.className = "status-badge status-active";
+            } else {
+                statusElement.textContent = "No Access";
+                statusElement.className = "status-badge status-inactive";
+            }
+        }
+
+        // Load files from server
+        function loadFiles() {
+            console.log("Loading files for user:", userId);
+            fetch(`/list_shared_files/${userId}`)
+                .then(response => {
+                    console.log("File list response status:", response.status);
+                    return response.json();
+                })
+                .then(data => {
+                    console.log("File list data:", data);
+                    const fileList = document.getElementById('file-list');
+                    
+                    if (data.error) {
+                        fileList.innerHTML = `
+                            <tr>
+                                <td colspan="4" class="text-center text-danger">
+                                    ${data.error}
+                                </td>
+                            </tr>
+                        `;
+                        return;
+                    }
+                    
+                    if (data.files.length === 0) {
+                        fileList.innerHTML = `
+                            <tr>
+                                <td colspan="4" class="text-center text-muted">
+                                    No files in shared folder
+                                </td>
+                            </tr>
+                        `;
+                        return;
+                    }
+                    
+                    fileList.innerHTML = '';
+                    data.files.forEach(file => {
+                        const row = document.createElement('tr');
+                        row.innerHTML = `
+                            <td>${file.name}</td>
+                            <td>${formatFileSize(file.size)}</td>
+                            <td>${new Date(file.modified).toLocaleString()}</td>
+                            <td class="file-actions">
+                                <button class="btn btn-sm btn-primary" onclick="downloadFile('${file.name}')">
+                                    Download
+                                </button>
+                                <button class="btn btn-sm btn-info" onclick="viewFile('${file.name}')">
+                                    View Online
+                                </button>
+                                ${currentAccess.write ? `
+                                <button class="btn btn-sm btn-danger" onclick="deleteFile('${file.name}')">
+                                    Delete
+                                </button>
+                                ` : ''}
+                            </td>
+                        `;
+                        fileList.appendChild(row);
+                    });
+                })
+                .catch(error => {
+                    console.error("Error loading files:", error);
+                    document.getElementById('file-list').innerHTML = `
+                        <tr>
+                            <td colspan="4" class="text-center text-danger">
+                                Error loading files: ${error.message}
+                            </td>
+                        </tr>
+                    `;
+                });
+        }
+
+        // Upload files
+        function uploadFiles() {
+            if (!currentAccess.write) {
+                alert("You don't have write access");
+                return;
+            }
+            
+            const input = document.getElementById('file-input');
+            if (input.files.length === 0) {
+                alert("Please select at least one file");
+                return;
+            }
+            
+            const formData = new FormData();
+            for (let i = 0; i < input.files.length; i++) {
+                formData.append('file', input.files[i]);
+            }
+            
+            console.log("Uploading files:", input.files.length);
+            fetch(`/upload_file/${userId}`, {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => {
+                console.log("Upload response status:", response.status);
+                return response.json();
+            })
+            .then(data => {
+                console.log("Upload response data:", data);
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+                alert(`Files uploaded successfully! Uploaded ${data.count} file(s).`);
+                loadFiles();
+                document.getElementById('file-input').value = '';
+            })
+            .catch(error => {
+                console.error("Error uploading files:", error);
+                alert("Failed to upload files: " + error.message);
+            });
+        }
+
+        // Download file
+        function downloadFile(filename) {
+            if (!currentAccess.read) {
+                alert("You don't have read access");
+                return;
+            }
+            
+            console.log("Downloading file:", filename);
+            window.open(`/download_file/${userId}/${encodeURIComponent(filename)}`, '_blank');
+        }
+
+        // View file online
+        function viewFile(filename) {
+            if (!currentAccess.read) {
+                alert("You don't have read access");
+                return;
+            }
+            
+            console.log("Viewing file online:", filename);
+            // Open file in new tab for viewing
+            window.open(`/download_file/${userId}/${encodeURIComponent(filename)}`, '_blank');
+        }
+
+        // Delete file
+        function deleteFile(filename) {
+            if (!currentAccess.write) {
+                alert("You don't have write access");
+                return;
+            }
+            
+            if (!confirm(`Are you sure you want to delete ${filename}?`)) {
+                return;
+            }
+            
+            console.log("Deleting file:", filename);
+            fetch(`/delete_file/${userId}/${encodeURIComponent(filename)}`, {
+                method: 'DELETE'
+            })
+            .then(response => {
+                console.log("Delete response status:", response.status);
+                return response.json();
+            })
+            .then(data => {
+                console.log("Delete response data:", data);
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+                alert("File deleted successfully");
+                loadFiles();
+            })
+            .catch(error => {
+                console.error("Error deleting file:", error);
+                alert("Failed to delete file: " + error.message);
+            });
+        }
+
+        // Helper function to format file size
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log("DOM loaded, initializing file manager");
+            checkPermissions();
+            
+            // Refresh files every 30 seconds
+            setInterval(() => {
+                if (currentAccess.read) {
+                    loadFiles();
+                }
+            }, 30000);
+        });
+    </script>
+</body>
+</html>

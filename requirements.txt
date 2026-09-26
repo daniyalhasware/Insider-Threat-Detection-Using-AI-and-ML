@@ -1,0 +1,20 @@
+# Common & Client Dependencies
+requests
+psutil
+Pillow
+python-socketio[client]
+opencv-python
+mss
+
+# Server (Flask) Dependencies
+Flask
+Flask-SocketIO
+joblib
+numpy
+pandas
+psutil
+scikit-learn
+requests
+opencv-python
+Pillow
+python-socketio
