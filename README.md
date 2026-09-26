@@ -70,6 +70,11 @@ Arun Adhikari
 
 🎓 B.Tech Final Year Project – Computer Engineering
 
+##Co-authors 
+
+Daniyal Hasware   🎓 B.Tech Final Year Project – Computer Engineering
+Rugved Myakal     🎓 B.Tech Final Year Project – Computer Engineering
+Ayaan Pathan      🎓 B.Tech Final Year Project – Computer Engineering
 
 ## 📂 Project Architecture
 ```mermaid
